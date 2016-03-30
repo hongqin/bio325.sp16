@@ -1,0 +1,116 @@
+---
+title: "Sce stressed expression" 
+author: "h qin"
+date: "2016 March 29"
+output: html_document
+---
+
+Expression data from S. cerevisiae under serial stresses
+GSE15936
+http://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE15936
+
+See http://www.ncbi.nlm.nih.gov/pubmed/19536156
+
+GPL2529	[Yeast_2] Affymetrix Yeast Genome 2.0 Array
+
+```{r, message=FALSE}
+rm(list=ls())
+setwd("~/github/GSE15936_yeast_stress")
+library(Biobase)
+library(GEOquery)
+library(limma)
+library(foreach)
+library(doMC)
+```
+
+Load series and platform data from GEO
+After retrieve it from NCBI GEO, ftp://ftp.ncbi.nlm.nih.gov/geo/series/GSE15nnn/GSE15936/matrix/
+Qin saved the data locally for in-class exercises. 
+
+```{r}
+ gset <- getGEO(filename="GSE15936_series_matrix.txt.gz")
+```
+
+get expression matrix
+```{r}
+ex <- exprs(gset)
+```
+
+Normalize them by total intensity
+```{r}
+means = apply(ex, 2, mean)
+scale = max(means)
+for(i in 1:length(ex[1,])){
+  ex[,i] = ex[,i] * scale/ means[i]
+}
+apply( ex, 2, mean) / scale
+apply( ex, 2, median) 
+boxplot( ex )
+```
+What is boxplot? See http://tinyurl.com/zw7bd9j
+
+Study the structure of gset
+```{r, comment=NA}
+str(gset)
+gset@phenoData@data
+```
+
+Find the experimental design information
+```{r, comment=NA}
+#gset@phenoData@data
+experimental_design = gset@phenoData@data #These should contain experiment meta info
+experimental_design[1:3,]
+# gset@phenoData@varMetadata
+# experimental_design[, "source_name_ch1"][1:10]
+experimental_design[5:8,  c("title", "source_name_ch1")]
+```
+
+Pick oxidative stress time course
+```{r}
+experimental_design$title
+experimental_design$title[grep("Oxidative stress, t", experimental_design$title)]
+selected = c(1, 2, grep("Oxidative stress, t", experimental_design$title))
+ex = ex[, selected]
+```
+
+Regression for H2O2 time dependent changes 
+```{r}
+mylevels = c(0,0,15,30,45,90)
+names(mylevels) = c("0","0", "15","30","45","90")
+my.pvalues = numeric(length=length(ex[,1]))
+
+registerDoMC(cores=4)
+#my.pvalues = foreach( i = 1:100, .combine='rbind') %dopar% {
+my.pvalues = foreach( i = 1:length(ex[,1]), .combine='rbind') %dopar% {
+  m = lm( ex[i,] ~ mylevels )
+  sm = summary(m)
+  pf(sm$fstatistic[1], sm$fstatistic[2], sm$fstatistic[3], lower.tail = FALSE)
+}
+row.names(my.pvalues) = row.names(gset@assayData$exprs)
+head(my.pvalues)
+```
+
+Load NCBI platform annotation
+```{r, message=FALSE}
+gpl <- annotation(gset)
+platf <- getGEO(gpl, AnnotGPL=TRUE)
+ncbifd <- data.frame(attr(dataTable(platf), "table"))
+ncbifd[1:10,]
+```
+
+pick significant genes
+```{r}
+my.pvalues.BH = p.adjust(my.pvalues, "BH")
+names(my.pvalues.BH) = row.names(gset@assayData$exprs)
+hist(my.pvalues.BH)
+```
+
+```{r, comment=NA}
+sig= my.pvalues.BH[my.pvalues.BH < 0.05]
+sig= data.frame(sig)
+sig$ID = row.names(sig)
+#ncbifd[ match(names(sig), as.character( ncbifd$ID) ),  ]
+sig2 = merge(sig, ncbifd, by="ID")
+sig2
+```
+
